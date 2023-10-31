@@ -43,6 +43,15 @@ const queries = {
             throw new Error("User not Found");
         const userToken = jwt_1.default.generateTokenForUser(user);
         return userToken;
+    }),
+    getCurrentUser: (parent, args, ctx) => __awaiter(void 0, void 0, void 0, function* () {
+        var _a;
+        const id = (_a = ctx.user) === null || _a === void 0 ? void 0 : _a.id;
+        if (!id) {
+            return null;
+        }
+        const currentUser = yield db_1.prismaClient.user.findUnique({ where: { id } });
+        return currentUser;
     })
 };
 const mutations = {};
