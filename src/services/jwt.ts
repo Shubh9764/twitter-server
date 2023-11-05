@@ -1,5 +1,5 @@
 import { User } from "@prisma/client";
-import { JWTUser } from "../interfaces";
+import { JWTUser } from "../app/interfaces";
 import JWT from "jsonwebtoken";
 const JWT_SECRET = "$uper@1234";
 class JwtService {
