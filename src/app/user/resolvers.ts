@@ -1,60 +1,14 @@
 import { PrismaClient, User } from "@prisma/client";
-import axios from "axios";
 import { prismaClient } from "../../clients/db/db";
-import JwtService from "../../services/jwt";
 import { GraphqlContext } from "../interfaces";
-interface GoogleTokenResult {
-  iss?: string;
-  azp?: string;
-  aud?: string;
-  sub?: string;
-  email: string;
-  email_verified?: string;
-  nbf?: string;
-  name?: string;
-  picture: string;
-  given_name: string;
-  family_name: string;
-  locale?: string;
-  iat?: string;
-  exp?: string;
-  jti?: string;
-  alg?: string;
-  kid?: string;
-  typ?: string;
-}
+import UserService from "../../services/user";
+import TweetService from "../../services/tweet";
+import { redisClient } from "../../clients/redis";
+
 const queries = {
   verifyGoogleToken: async (parent: any, { token }: { token: string }) => {
-    const googleToken = token;
-    const goofleOauthUrl = new URL(`https://oauth2.googleapis.com/tokeninfo?`);
-    goofleOauthUrl.searchParams.set("id_token", googleToken);
-
-    const { data } = await axios.get<GoogleTokenResult>(
-      goofleOauthUrl.toString(),
-      {
-        responseType: "json",
-      }
-    );
-    console.log(data);
-    let user = await prismaClient.user.findUnique({
-      where: { email: data.email },
-    });
-    if (!user) {
-      await prismaClient.user.create({
-        data: {
-          email: data.email,
-          firstName: data.given_name,
-          lastName: data.family_name,
-          profileImageUrl: data.picture,
-        },
-      });
-      user = await prismaClient.user.findUnique({
-        where: { email: data.email },
-      });
-    }
-    if (!user) throw new Error("User not Found");
-    const userToken = JwtService.generateTokenForUser(user);
-    return userToken;
+    const resultToken = await UserService.verifyGoogleAuthToken(token);
+    return resultToken;
   },
   getCurrentUser: async (parent: any, args: any, ctx: GraphqlContext) => {
     const id = ctx.user?.id;
@@ -62,7 +16,7 @@ const queries = {
     if (!id) {
       return null;
     }
-    const currentUser = await prismaClient.user.findUnique({ where: { id } });
+    const currentUser = await UserService.getUserById(id);
     return currentUser;
   },
   getUserById: async (
@@ -70,17 +24,76 @@ const queries = {
     { id }: { id: string },
     ctx: GraphqlContext
   ) => {
-    return prismaClient.user.findUnique({ where: { id } });
+    return UserService.getUserById(id);
   },
 };
 
-const mutations = {};
+const mutations = {
+  followUser: async (
+    parent: any,
+    { to }: { to: string },
+    ctx: GraphqlContext
+  ) => {
+    if (!ctx.user || !ctx.user.id) throw new Error("Unauthenticated");
+
+    await UserService.followUser(ctx.user.id, to);
+    await redisClient.del(`RECOMMENDED_USERS:${ctx.user.id}`);
+    return true;
+  },
+  unFollowUser: async (
+    parent: any,
+    { to }: { to: string },
+    ctx: GraphqlContext
+  ) => {
+    if (!ctx.user || !ctx.user.id) throw new Error("Unauthenticated");
+
+    await UserService.unFollowUser(ctx.user.id, to);
+    await redisClient.del(`RECOMMENDED_USERS:${ctx.user.id}`);
+    return true;
+  },
+};
 
 const extraResolver = {
   User: {
-    tweets: (parent: User) =>
-      prismaClient.tweet.findMany({ where: { authorId: parent.id } }),
+    tweets: (parent: User) => TweetService.getAllTweetsByAuthorId(parent.id),
+    followers: (parent: User) => UserService.getAllFollowers(parent.id),
+    following: (parent: User) => UserService.getAllFollowing(parent.id),
+    recommendedUsers: async (parent: User, _: any, ctx: GraphqlContext) => {
+      if (!ctx.user) return [];
+      const cachedValue = await redisClient.get(
+        `RECOMMENDED_USERS:${ctx.user.id}`
+      );
+      if (cachedValue) return JSON.parse(cachedValue);
+      const myFollowing = await prismaClient.follows.findMany({
+        where: {
+          follower: { id: parent.id },
+        },
+        include: {
+          following: {
+            include: { followers: { include: { following: true } } },
+          },
+        },
+      });
+      const users: User[] = [];
+      for (const followings of myFollowing) {
+        for (const followingOfFollowedUser of followings.following.followers) {
+          if (
+            followingOfFollowedUser.following.id !== ctx.user.id &&
+            myFollowing.findIndex(
+              (e) => e.followingId === followingOfFollowedUser.following.id
+            ) < 0
+          ) {
+            users.push(followingOfFollowedUser.following);
+          }
+        }
+      }
+      await redisClient.set(
+        `RECOMMENDED_USERS:${ctx.user.id}`,
+        JSON.stringify(users)
+      );
+      return users;
+    },
   },
 };
 
-export const resolvers = { queries, extraResolver };
+export const resolvers = { queries, mutations, extraResolver };

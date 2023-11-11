@@ -8,29 +8,50 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
         step((generator = generator.apply(thisArg, _arguments || [])).next());
     });
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.resolvers = void 0;
-const db_1 = require("../../clients/db/db");
+const client_s3_1 = require("@aws-sdk/client-s3");
+const s3_request_presigner_1 = require("@aws-sdk/s3-request-presigner");
+const user_1 = __importDefault(require("../../services/user"));
+const tweet_1 = __importDefault(require("../../services/tweet"));
 const mutations = {
     createTweet: (parent, { payload }, ctx) => __awaiter(void 0, void 0, void 0, function* () {
         if (!ctx.user)
             throw new Error("user not authenticated");
-        const tweet = yield db_1.prismaClient.tweet.create({
-            data: {
-                content: payload.content,
-                imageUrl: payload.imageURL,
-                author: { connect: { id: ctx.user.id } },
-            },
-        });
+        const tweet = yield tweet_1.default.createTweet(Object.assign(Object.assign({}, payload), { userId: ctx.user.id }));
         return tweet;
     }),
 };
+const s3Client = new client_s3_1.S3Client({ region: process.env.AWS_DEFAULT_REGION });
 const queries = {
-    getAllTweets: () => db_1.prismaClient.tweet.findMany({ orderBy: { createdAt: 'desc' } })
+    getAllTweets: () => tweet_1.default.getAllTweets(),
+    getSignedUrlForTweet: (parent, { imageName, imageType }, ctx) => __awaiter(void 0, void 0, void 0, function* () {
+        if (!ctx.user || !ctx.user.id)
+            throw new Error("Unauthenticated");
+        const allowedImageTypes = [
+            "image/jpg",
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "image/jfif",
+        ];
+        if (!allowedImageTypes.includes(imageType))
+            throw new Error("Unsupported ImageType");
+        const putObjectCommand = new client_s3_1.PutObjectCommand({
+            Bucket: process.env.AWS_S3_BUCKET,
+            ContentType: imageType,
+            Key: `uploads/${ctx.user.id}/tweets/${imageName}-${Date.now().toString()}`,
+        });
+        const signedUrl = yield (0, s3_request_presigner_1.getSignedUrl)(s3Client, putObjectCommand);
+        return signedUrl;
+    }),
 };
 const extraResolver = {
     Tweet: {
-        author: (parent) => db_1.prismaClient.user.findUnique({ where: { id: parent.authorId } })
-    }
+        author: (parent) => user_1.default.getUserById(parent.authorId),
+    },
 };
 exports.resolvers = { queries, mutations, extraResolver };

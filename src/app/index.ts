@@ -23,18 +23,20 @@ export async function initServer() {
                 }
                 type Mutation {
                   ${Tweet.mutations}
+                  ${User.mutations}
                 }
             `,
     resolvers: {
       Query: {
         ...User.resolvers.queries,
-        ...Tweet.resolvers.queries
+        ...Tweet.resolvers.queries,
       },
-      Mutation:{
-        ...Tweet.resolvers.mutations
+      Mutation: {
+        ...Tweet.resolvers.mutations,
+        ...User.resolvers.mutations,
       },
       ...Tweet.resolvers.extraResolver,
-      ...User.resolvers.extraResolver
+      ...User.resolvers.extraResolver,
     },
   });
   await graphqlServer.start();
@@ -45,7 +47,9 @@ export async function initServer() {
       context: async ({ req, res }) => {
         return {
           user: req.headers.authorization
-            ? JwtService.decodeToken(req.headers.authorization.split("Bearer ")[1])
+            ? JwtService.decodeToken(
+                req.headers.authorization.split("Bearer ")[1]
+              )
             : undefined,
         };
       },
